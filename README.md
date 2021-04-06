@@ -23,3 +23,7 @@ target_link_libraries(MY_TARGET PRIVATE Threads::Threads)
 
 # Usage
 TODO
+
+# Upcoming Features
+[] - timeout for clients
+[] - better handling of shortreads/-writes
