@@ -8,12 +8,12 @@ Simple to use C++ Header-Only Library for TCP Connections
 # How To
 Just include the header (`#include "simple_networking.h"`) and link your program against PThread.
 
-## Linking PThread in G++
+## Linking PThread with G++
 ```bash
 g++ src.c -pthread
 ```
 
-## Linking PThread in CMake
+## Linking PThread with CMake
 ```cmake
 find_package(Threads REQUIRED)
 
