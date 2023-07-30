@@ -64,7 +64,7 @@ tcp_server.StopListening();
 `simple_networking:TCPClient(bool verbose)`       | Constructor creating a TCPClient object. Allowing to enable verbose mode.
 `int TCPClient.Connect(const std::string& ip_address, size_t port)` | Connects to the given IP and port. Returns 0 on success. 
 `void TCPClient.Disconnect()`   | Gracefully terminates the connection to the server.
-`int SendMessage(ByteArray message)` |  Sends message to the server. Returns 0 on success.
+`int SendMessage(simple_networking::ByteArray message)` |  Sends message to the server. Returns 0 on success.
 `int SendMessage(const std::string& message)` | Sends message to the server. Returns 0 on success.
 
 ## Client Example 
