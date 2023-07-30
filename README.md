@@ -2,6 +2,35 @@
 Simple to use C++ Header-Only Library for TCP Connections.
 The library aims to provide an easy-to-use C++-style wrapper over the Linux socket interface.
 
+## Server Example 
+```cpp
+void handler([[maybe_unused]] int client_socket, simple_networking::ByteArray message) {
+  std::cout << "Received '" << message.ToString() << "'" << std::endl;
+}
+
+[...]
+
+simple_networking::TCPServer tcp_server;
+tcp_server.Bind("0.0.0.0", 31337);
+tcp_server.Listen(&handler, false);
+
+std::cout << "Press key to stop server" << std::endl;
+getchar();
+
+tcp_server.StopListening();
+```
+
+## Client Example 
+```cpp
+simple_networking::TCPClient tcp_client;
+tcp_client.Connect("127.0.0.1", 31337);
+tcp_client.SendMessage("hello server! (1)");
+tcp_client.SendMessage("hello server! (2)");
+tcp_client.SendMessage("hello server! (3)");
+tcp_client.Disconnect();
+```
+
+
 # Dependencies
 - C++17
 - PThread
@@ -38,23 +67,6 @@ One server instance can handle multiple client instances.
 `int TCPServer.DisconnectFromClient(int client_socket)` | Stops the connection with the client. Returns 0 on success.
 `int TCPServer.ReadNBytesFromSocket(int socket, size_t bytes_to_read, int* errnum, simple_networking::ByteArray* message_buffer)` | Reads `bytes_to_read` bytes from a given socket to `message_buffer`. Errors are stored in `errnum`. Returns number of bytes, 0 on client disconnect, or negative numbers on error.
 
-## Server Example 
-```cpp
-void handler([[maybe_unused]] int client_socket, simple_networking::ByteArray message) {
-  std::cout << "Received '" << message.ToString() << "'" << std::endl;
-}
-
-[...]
-
-simple_networking::TCPServer tcp_server;
-tcp_server.Bind("0.0.0.0", 31337);
-tcp_server.Listen(&handler, false);
-
-std::cout << "Press key to stop server" << std::endl;
-getchar();
-
-tcp_server.StopListening();
-```
 
 ## Client API
 
@@ -66,18 +78,6 @@ tcp_server.StopListening();
 `void TCPClient.Disconnect()`   | Gracefully terminates the connection to the server.
 `int SendMessage(simple_networking::ByteArray message)` |  Sends message to the server. Returns 0 on success.
 `int SendMessage(const std::string& message)` | Sends message to the server. Returns 0 on success.
-
-## Client Example 
-```cpp
-simple_networking::TCPClient tcp_client;
-tcp_client.Connect("127.0.0.1", 31337);
-tcp_client.SendMessage("hello server! (1)");
-tcp_client.SendMessage("hello server! (2)");
-tcp_client.SendMessage("hello server! (3)");
-tcp_client.Disconnect();
-```
-
- 
 
 
 # Future Features
