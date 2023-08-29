@@ -3,11 +3,12 @@
 #ifndef SIMPLE_NETWORKING_H
 #define SIMPLE_NETWORKING_H
 
-#include <libnet.h>
+#include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/epoll.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <unistd.h>
 
 #include <atomic>
 #include <cassert>
