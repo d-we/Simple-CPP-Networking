@@ -6,10 +6,10 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/epoll.h>
+#include <fcntl.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
-#include <fcntl.h>
 
 #include <atomic>
 #include <cassert>
@@ -26,6 +26,16 @@
 
 namespace simple_networking {
 
+// ==========================================================================
+//                            GLOBAL CONFIGURATION
+// ==========================================================================
+// internal message format: message length (4B Little Endian) | message
+static constexpr int kMessageLengthBytes = 4;
+static constexpr int kMaximumMessageLength = 300000;
+
+// ==========================================================================
+//                            ByteArray 
+// ==========================================================================
 /// Simple wrapper around std::vector<std::byte> which is used to represent bytearrays
 class ByteArray {
  public:
@@ -106,11 +116,67 @@ inline const std::byte& ByteArray::operator[](std::size_t idx) const {
 }
 
 // ==========================================================================
-//                            GLOBAL CONFIGURATION
+//                    Utility Functions for Communication 
 // ==========================================================================
-// internal message format: message length (4B Little Endian) | message
-static constexpr int kMessageLengthBytes = 4;
-static constexpr int kMaximumMessageLength = 300000;
+
+inline ByteArray EncodeMessageLength(int message_length) {
+  ByteArray result(kMessageLengthBytes);
+
+  for (int i = 0; i < kMessageLengthBytes; i++) {
+    result[i] = static_cast<std::byte>(message_length >> (i * 8));
+  }
+  return result;
+}
+
+inline int SendNetworkMessage(int client_socket, ByteArray message) {
+  if (message.Size() > kMaximumMessageLength) {
+    return -1;
+  }
+  if (client_socket == -1) {
+    return -2;
+  }
+
+  // send message size
+  ByteArray encoded_length = EncodeMessageLength(message.Size());
+  for (size_t send_bytes = 0; send_bytes < encoded_length.Size();) {
+    int bytes = send(client_socket,
+                     encoded_length.ToString().c_str(),
+                     encoded_length.Size(),
+                     0);
+    if (bytes < 0) {
+      if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        continue;
+      }
+      return -3;
+    }
+    send_bytes += bytes;
+  }
+
+  //printf("sending %s\n", message.ToHexEncodedString().c_str());
+  // send message content
+  std::string message_str = message.ToString();
+  for (size_t send_bytes = 0; send_bytes < message.Size();) {
+    int bytes = send(client_socket,
+                     message_str.c_str() + send_bytes,
+                     message.Size() - send_bytes,
+                     0);
+    if (bytes <= 0) {
+      if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        continue;
+      }
+      return -4;
+    }
+    send_bytes += bytes;
+  }
+
+  return 0;
+}
+
+inline int SendNetworkMessage(int client_sock, const std::string& message) {
+  return SendNetworkMessage(client_sock, ByteArray(message.c_str(), message.size()));
+}
+
+
 
 // ==========================================================================
 //                                 SERVER
@@ -124,8 +190,8 @@ class TCPServer {
   TCPServer(bool verbose, int client_timeout_in_seconds, int backlog_size);
   ~TCPServer();
   void Bind(const std::string& ip_address, size_t port);
-  void Listen(void(handler_func)(int client_socket, ByteArray message),
-              bool blocking);
+  template <typename T> void Listen(void(handler_func)(T arg, int client_socket, ByteArray message),
+              T handler_arg, bool blocking);
   void StopListening();
   int ReadNBytesFromSocket(int socket,
                            size_t bytes_to_read,
@@ -134,9 +200,11 @@ class TCPServer {
   int DisconnectFromClient(int client_socket);
  private:
   int DecodeMessageLength(ByteArray message_length_bytes);
-  void Dispatcher(void(handler_function)(int client_socket, ByteArray message));
-  void ClientHandlingIntern(int client_socket,
-                            void(handler_function)(int client_socket, ByteArray message));
+  template <typename T> void Dispatcher(void(handler_function)(T arg, int client_socket, ByteArray message),
+                                        T handler_arg);
+  template <typename T> void ClientHandlingIntern(int client_socket,
+                            void(handler_function)(T arg, int client_socket, ByteArray message),
+                            T handler_arg);
   void MakeSocketNonBlocking(int socket);
   ///
   /// \param socket socket to read from
@@ -220,6 +288,14 @@ inline void TCPServer::Bind(const std::string& ip_address, size_t port) {
     ThrowErrorAndAbort("Failed to create socket!");
   }
   open_sockets_.insert(server_fd_);
+  
+  // set SO_REUSEADDR to make socket re-bindable
+  const int enable = 1;
+  int err = setsockopt(server_fd_, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(int));
+  if (err) {
+    ThrowErrorAndAbort("Could not set SO_REUSEADDR!");
+  }
+
 
   struct sockaddr_in server_addr;
   memset(&server_addr, '\0', sizeof(server_addr));
@@ -230,15 +306,16 @@ inline void TCPServer::Bind(const std::string& ip_address, size_t port) {
   }
   server_addr.sin_port = htons(port);
 
-  int err = bind(server_fd_, reinterpret_cast<struct sockaddr*>(&server_addr), sizeof(server_addr));
+  err = bind(server_fd_, reinterpret_cast<struct sockaddr*>(&server_addr), sizeof(server_addr));
   if (err) {
     ThrowErrorAndAbort("Failed to bind to " + ip_address + ":" + std::to_string(port));
   }
   PrintInfoMessage("Bound to " + ip_address + ":" + std::to_string(port) + ".");
 }
 
-inline void TCPServer::Listen(
-    void (handler_func)(int client_socket, ByteArray message),
+template <typename T> inline void TCPServer::Listen(
+    void (handler_func)(T arg, int client_socket, ByteArray message),
+    T handler_arg,
     bool blocking) {
   // initialize shutdown routine
   shutdown_ = false;
@@ -269,15 +346,16 @@ inline void TCPServer::Listen(
     ThrowErrorAndAbort("Adding main socket to Epoll set failed");
   }
   if (blocking) {
-    Dispatcher(handler_func);
+    Dispatcher<T>(handler_func, handler_arg);
   } else {
-    std::thread handling_thread(&TCPServer::Dispatcher, this, handler_func);
+    std::thread handling_thread(&TCPServer::Dispatcher<T>, this, handler_func, handler_arg);
     handler_thread_ = std::move(handling_thread);
   }
 }
 
-inline void TCPServer::Dispatcher(void (handler_function)(int client_socket, ByteArray message)) {
-  (void) handler_function;
+template <typename T> inline void TCPServer::Dispatcher(
+  [[maybe_unused]] void (handler_function)(T arg, int client_socket, ByteArray message),
+   T handler_arg) {
 
   struct epoll_event events[kEpollQueueSize];
   static struct epoll_event ev;
@@ -333,7 +411,7 @@ inline void TCPServer::Dispatcher(void (handler_function)(int client_socket, Byt
                              + std::to_string(client_socket) + ").");
         // TODO: initialize timeout counters
       } else {  // if (current_socket == server_fd_)
-        ClientHandlingIntern(current_socket, handler_function);
+        ClientHandlingIntern<T>(current_socket, handler_function, handler_arg);
       }
 
     }  // for (int i = 0; i < ready_events_counter; i++)
@@ -371,10 +449,13 @@ inline int TCPServer::DisconnectFromClient(int client_socket) {
   return 0;
 }
 
-inline void TCPServer::ClientHandlingIntern(int client_socket,
+template <typename T> inline void TCPServer::ClientHandlingIntern(
+                                            int client_socket,
                                             void (handler_function)(
+                                                T arg,
                                                 int client_socket,
-                                                ByteArray message)) {
+                                                ByteArray message),
+                                            T handler_arg) {
   int saved_errno = 0;
   ByteArray message_length_bytes;
   int read_bytes = ReadNBytesFromSocket(client_socket,
@@ -409,7 +490,7 @@ inline void TCPServer::ClientHandlingIntern(int client_socket,
   }
 
   // call user-provided handler function
-  handler_function(client_socket, message);
+  handler_function(handler_arg, client_socket, message);
 }
 
 inline void TCPServer::ThrowErrorAndAbort(std::string error_message) {
