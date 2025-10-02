@@ -128,6 +128,15 @@ inline ByteArray EncodeMessageLength(int message_length) {
   return result;
 }
 
+inline int DecodeMessageLength(ByteArray message_length_bytes) {
+  uint32_t decoded_length = 0;
+  for (int i = 0; i < kMessageLengthBytes; i++) {
+    uint8_t c = static_cast<uint8_t>(message_length_bytes[i]);
+    decoded_length += static_cast<uint32_t>(c) << (8 * i);
+  }
+  return decoded_length;
+}
+
 inline int SendNetworkMessage(int client_socket, ByteArray message) {
   if (message.Size() > kMaximumMessageLength) {
     return -1;
@@ -199,7 +208,6 @@ class TCPServer {
                            ByteArray* message_buffer);
   int DisconnectFromClient(int client_socket);
  private:
-  int DecodeMessageLength(ByteArray message_length_bytes);
   template <typename T> void Dispatcher(void(handler_function)(T arg, int client_socket, ByteArray message),
                                         T handler_arg);
   template <typename T> void ClientHandlingIntern(int client_socket,
@@ -511,14 +519,6 @@ inline void TCPServer::PrintInfoMessage(const std::string& message) {
   }
 }
 
-inline int TCPServer::DecodeMessageLength(ByteArray message_length_bytes) {
-  uint32_t decoded_length = 0;
-  for (int i = 0; i < kMessageLengthBytes; i++) {
-    uint8_t c = static_cast<uint8_t>(message_length_bytes[i]);
-    decoded_length += static_cast<uint32_t>(c) << (8 * i);
-  }
-  return decoded_length;
-}
 
 inline void TCPServer::MakeSocketNonBlocking(int socket) {
   int saved_flags = fcntl(socket, F_GETFL);
@@ -604,10 +604,16 @@ class TCPClient {
   void Disconnect();
   int SendMessage(ByteArray message);
   int SendMessage(const std::string& message);
+  ByteArray ReadMessage();
 
  private:
+  inline int ReadNBytesFromSocket(
+      size_t bytes_to_read,
+      int* errnum,
+      ByteArray* message_buffer);
   ByteArray EncodeMessageLength(int message_length);
   int client_socket_ = -1;
+  ByteArray read_buffer_;
   bool verbose_;
 };
 
@@ -695,6 +701,98 @@ inline int TCPClient::SendMessage(ByteArray message) {
 
 inline int TCPClient::SendMessage(const std::string& message) {
   return SendMessage(ByteArray(message.c_str(), message.size()));
+}
+
+// returns error code
+inline ByteArray TCPClient::ReadMessage() {
+  int saved_errno = 0;
+  ByteArray message_length_bytes;
+  int read_bytes = ReadNBytesFromSocket(
+      kMessageLengthBytes,
+      &saved_errno,
+      &message_length_bytes);
+  if (read_bytes <= 0) {
+    if (saved_errno == EAGAIN || saved_errno == EWOULDBLOCK) {
+      // socket would block hence we just ignore the request
+      throw std::runtime_error("Socket would block");
+    }
+    // peer closed socket or something else failed - bye bye
+    throw std::runtime_error("Peer likely closed connection");
+  }  // if (read_bytes <= 0)
+
+  // read actual message from the client
+  int message_length = DecodeMessageLength(message_length_bytes);
+  if (message_length < 0 || message_length > kMaximumMessageLength) {
+    // that's fatal at the moment
+    throw std::runtime_error("Invalid message length. Something went wrong!");
+  }
+
+  saved_errno = 0;
+  ByteArray message;
+  read_bytes = ReadNBytesFromSocket(message_length, &saved_errno, &message);
+  if (read_bytes <= 0) {
+    if (saved_errno == EAGAIN || saved_errno == EWOULDBLOCK) {
+      // TODO: throwing here without saving any state leaves room for error 
+      // in case of a partial read after the message length
+      throw std::runtime_error("Socket would block");
+    }
+    // peer closed socket or something else failed - bye bye
+    throw std::runtime_error("Peer likely closed connection");
+  }
+  return message;
+}
+
+inline int TCPClient::ReadNBytesFromSocket(size_t bytes_to_read,
+                                           int* errnum,
+                                           ByteArray* message_buffer) {
+  assert(errnum != nullptr);
+  assert(message_buffer != nullptr);
+
+  size_t overall_bytes_read = 0;
+  char* raw_message_buffer = new char[bytes_to_read];
+
+  // check whether there are bytes buffered and if so fetch them
+  if (read_buffer_.Size() > 0) {
+    int bytes_needed_from_buffer = std::min(read_buffer_.Size(), overall_bytes_read);
+    for (int i = 0; i < bytes_needed_from_buffer; i++) {
+      raw_message_buffer[i] = static_cast<char>(read_buffer_[i]);
+    }
+    // remove read bytes from readbuffer
+    read_buffer_.Erase(0, bytes_needed_from_buffer - 1);
+    overall_bytes_read += bytes_needed_from_buffer;
+  }
+
+  // read bytes from the actual socket
+  while (overall_bytes_read < bytes_to_read) {
+    int current_bytes_read = read(client_socket_,
+                                  raw_message_buffer + overall_bytes_read,
+                                  bytes_to_read - overall_bytes_read);
+    if (current_bytes_read <= 0) {
+      if (current_bytes_read == 0) {
+        // client wants to close the connection
+        delete[] raw_message_buffer;
+        return 0;
+      }
+      *errnum = current_bytes_read == 0 ? 0 : errno;
+      if (errno == EAGAIN) {
+        // if we cannot read currently; just try again
+        continue;
+      }
+      if (overall_bytes_read > 0) {
+        // we already read some parts hence we need to store that to the corresponding readbuffer
+        read_buffer_.Reserve(read_buffer_.Size() + overall_bytes_read);
+        for (size_t i = 0; i < overall_bytes_read; i++) {
+          read_buffer_.Append(raw_message_buffer[i]);
+        }
+      }
+      delete[] raw_message_buffer;
+      return -1;
+    }
+    overall_bytes_read += current_bytes_read;
+  }
+  *message_buffer = ByteArray(raw_message_buffer, overall_bytes_read);
+  delete[] raw_message_buffer;
+  return overall_bytes_read;
 }
 
 inline ByteArray TCPClient::EncodeMessageLength(int message_length) {
