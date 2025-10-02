@@ -4,15 +4,24 @@ The library aims to provide an easy-to-use C++-style wrapper over the Linux sock
 
 ## Server Example 
 ```cpp
-void handler([[maybe_unused]] int client_socket, simple_networking::ByteArray message) {
-  std::cout << "Received '" << message.ToString() << "'" << std::endl;
+struct handler_args {
+};
+
+void handler(
+    [[maybe_unused]] const struct handler_args& args, 
+    int client_socket, 
+    simple_networking::ByteArray message) {
+  (void) client_socket;
+  std::cout << "received message: " << message.ToString() << std::endl;
 }
 
 [...]
 
 simple_networking::TCPServer tcp_server;
+struct handler_args args;
+
 tcp_server.Bind("0.0.0.0", 31337);
-tcp_server.Listen(&handler, false);
+tcp_server.Listen<const struct handler_args&>(&handler, args, false);
 
 std::cout << "Press key to stop server" << std::endl;
 getchar();
