@@ -17,7 +17,9 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[]) {
     std::string msg = "Hello-Server-" + std::to_string(i) ;
     std::cout << "Sending '" << msg << "'" << std::endl;
     int ret = tcp_client.SendMessage(msg);
-    assert(ret == 0);
+    if (ret != 0) {
+      std::cout << "Error sending message: " << ret << std::endl;
+    }
   }
   tcp_client.Disconnect();
   return 0;
