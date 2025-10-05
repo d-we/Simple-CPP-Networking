@@ -151,7 +151,7 @@ inline int SendNetworkMessage(int client_socket, ByteArray message) {
     int bytes = send(client_socket,
                      encoded_length.ToString().c_str(),
                      encoded_length.Size(),
-                     0);
+                     MSG_NOSIGNAL); // ignore SIGPIPE (handled via return value)
     if (bytes < 0) {
       if (errno == EAGAIN || errno == EWOULDBLOCK) {
         continue;
@@ -161,14 +161,13 @@ inline int SendNetworkMessage(int client_socket, ByteArray message) {
     send_bytes += bytes;
   }
 
-  //printf("sending %s\n", message.ToHexEncodedString().c_str());
   // send message content
   std::string message_str = message.ToString();
   for (size_t send_bytes = 0; send_bytes < message.Size();) {
     int bytes = send(client_socket,
                      message_str.c_str() + send_bytes,
                      message.Size() - send_bytes,
-                     0);
+                     MSG_NOSIGNAL); // ignore SIGPIPE (handled via return value)
     if (bytes <= 0) {
       if (errno == EAGAIN || errno == EWOULDBLOCK) {
         continue;
@@ -177,7 +176,6 @@ inline int SendNetworkMessage(int client_socket, ByteArray message) {
     }
     send_bytes += bytes;
   }
-
   return 0;
 }
 
@@ -669,7 +667,7 @@ inline int TCPClient::SendMessage(ByteArray message) {
     int bytes = send(client_socket_,
                      encoded_length.ToString().c_str(),
                      encoded_length.Size(),
-                     0);
+                     MSG_NOSIGNAL); // ignore SIGPIPE (handled via return value)
     if (bytes < 0) {
       if (errno == EAGAIN || errno == EWOULDBLOCK) {
         continue;
@@ -679,14 +677,13 @@ inline int TCPClient::SendMessage(ByteArray message) {
     send_bytes += bytes;
   }
 
-  //printf("sending %s\n", message.ToHexEncodedString().c_str());
   // send message content
   std::string message_str = message.ToString();
   for (size_t send_bytes = 0; send_bytes < message.Size();) {
     int bytes = send(client_socket_,
                      message_str.c_str() + send_bytes,
                      message.Size() - send_bytes,
-                     0);
+                     MSG_NOSIGNAL); // ignore SIGPIPE (handled via return value)
     if (bytes <= 0) {
       if (errno == EAGAIN || errno == EWOULDBLOCK) {
         continue;
